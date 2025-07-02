@@ -1,10 +1,12 @@
 from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score, accuracy_score
-# from sklearn.metrics import silhouette_score
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 # from sklearn.cluster import KMeans
 from scipy.optimize import linear_sum_assignment
 from torch.utils.data import DataLoader
 import numpy as np
 import torch
+import scanpy as sc
+import scib
 
 def transform_label(labels):
     from sklearn.preprocessing import LabelEncoder
@@ -44,7 +46,7 @@ def purity(y_true, y_pred):
     return accuracy_score(y_true, y_voted_labels)
 
 
-def evaluate(label, pred):
+def evaluate_cmp(label, pred, z):
     label = transform_label(label)
     pred = transform_label(pred)
     
@@ -53,12 +55,48 @@ def evaluate(label, pred):
     # # 找到每列的最大值行作为映射
     # max_indices = np.argmax(cm, axis=0)
     # pred = np.array([max_indices[i] for i in pred])
-    
+
+    acc = cluster_acc(label, pred)
     nmi = normalized_mutual_info_score(label, pred)
     ari = adjusted_rand_score(label, pred)
-    acc = cluster_acc(label, pred)
     pur = purity(label, pred)
-    return nmi, ari, acc, pur
+    hidden = sc.AnnData(X=z)
+    hidden.obs['label'] = label
+    hidden.obs['label'] = hidden.obs['label'].astype('category')
+    hidden.obsm['X_pca'] = hidden.X.copy()
+    casw = scib.metrics.silhouette(hidden, label_key='label', embed='X_pca')
+    clisi = scib.metrics.clisi_graph(hidden, type_="embed", label_key='label', use_rep='X_pca')
+    return nmi, ari, acc, pur, casw, clisi
+
+
+def evaluate(label, pred, z, return_full_metric=False):
+    label = transform_label(label)
+    pred = transform_label(pred)
+    
+    # from sklearn.metrics import confusion_matrix
+    # cm = confusion_matrix(label, pred)
+    # # 找到每列的最大值行作为映射
+    # max_indices = np.argmax(cm, axis=0)
+    # pred = np.array([max_indices[i] for i in pred])
+
+    acc = cluster_acc(label, pred)
+    if return_full_metric == False:
+        return acc
+    nmi = normalized_mutual_info_score(label, pred)
+    ari = adjusted_rand_score(label, pred)
+    pur = purity(label, pred)
+    hidden = sc.AnnData(X=z)
+    hidden.obs['label'] = label
+    hidden.obs['label'] = hidden.obs['label'].astype('category')
+    sc.tl.pca(hidden, svd_solver='arpack')
+    pca_casw = scib.metrics.silhouette(hidden, label_key='label', embed='X_pca')
+    pca_clisi = scib.metrics.clisi_graph(hidden, type_="embed", label_key='label', use_rep='X_pca')
+    lda = LinearDiscriminantAnalysis()
+    X_transformed = lda.fit_transform(hidden.obsm['X_pca'], pred)
+    hidden.obsm['lda'] = X_transformed
+    lda_casw = scib.metrics.silhouette(hidden, label_key='label', embed='lda')
+    lda_clisi = scib.metrics.clisi_graph(hidden, type_="embed", label_key='label', use_rep='lda')
+    return nmi, ari, acc, pur, pca_casw, pca_clisi, lda_casw, lda_clisi
 
 
 def inference(loader, model, device, view, data_size, return_latent=False):
@@ -66,7 +104,6 @@ def inference(loader, model, device, view, data_size, return_latent=False):
     soft_vector = []
     target_vector = []
     labels_vector = []
-    # Qs_vector = []
     glb_vector = []
     model.eval()
     for step, (xs, y) in enumerate(loader):
@@ -84,9 +121,7 @@ def inference(loader, model, device, view, data_size, return_latent=False):
         target_vector.extend(preds.cpu().detach().numpy())
         if return_latent:
             glb_vector.append(glb.cpu().detach().numpy())
-            # Qs_vector.extend(Qs.cpu().detach().numpy())
 
-    # Qs_vector = np.concatenate(Qs_vector, axis=0)
     if return_latent:
         glb_vector = np.concatenate(glb_vector, axis=0)
     labels_vector = np.array(labels_vector).reshape(data_size)
@@ -97,26 +132,28 @@ def inference(loader, model, device, view, data_size, return_latent=False):
     return labels_vector, target_pred, soft_pred, glb_vector #, Qs_vector
 
 
-def valid(model, device, dataset, view, data_size, isprint=True, return_latent=False):
+def valid(model, device, dataset, view, data_size, isprint=True, return_latent=False, return_full_metric=False):
     test_loader = DataLoader(
-            dataset,
-            batch_size=256,
-            shuffle=False,
-        )
-    if return_latent:
-        labels_vector, target_pred, soft_pred, glb_vector = inference(test_loader, model, device, view, data_size, return_latent)
-    else:
-        labels_vector, target_pred, soft_pred = inference(test_loader, model, device, view, data_size, return_latent)
+        dataset,
+        batch_size=256,
+        shuffle=False,
+    )
     
-    nmi, ari, acc, pur = evaluate(labels_vector, soft_pred)
+    labels_vector, target_pred, soft_pred, glb_vector = inference(test_loader, model, device, view, data_size, True)
+    
+    if return_full_metric == False:
+        acc = evaluate(labels_vector, target_pred, glb_vector, return_full_metric)
+        return acc
+    
+    nmi, ari, acc, pur, pca_casw, pca_clisi, lda_casw, lda_clisi = evaluate(labels_vector, soft_pred, glb_vector, True)
     if isprint :
         print("Clustering results on soft pred: " + str(labels_vector.shape[0]))
-        print('ACC = {:.4f} NMI = {:.4f} ARI = {:.4f} PUR={:.4f}'.format(acc, nmi, ari, pur))
+        print('ACC = {:.4f} NMI = {:.4f} ARI = {:.4f} PUR={:.4f} pca_cASW={:.4f} pca_cLISI={:.4f} lda_cASW={:.4f} lda_cLISI={:.4f}'.format(acc, nmi, ari, pur, pca_casw, pca_clisi, lda_casw, lda_clisi))
     
-    nmi, ari, acc, pur = evaluate(labels_vector, target_pred)
+    nmi, ari, acc, pur, pca_casw, pca_clisi, lda_casw, lda_clisi = evaluate(labels_vector, target_pred, glb_vector, True)
     if isprint :
         print("Clustering results on target pred: " + str(labels_vector.shape[0]))
-        print('ACC = {:.4f} NMI = {:.4f} ARI = {:.4f} PUR={:.4f}'.format(acc, nmi, ari, pur))
+        print('ACC = {:.4f} NMI = {:.4f} ARI = {:.4f} PUR={:.4f} pca_cASW={:.4f} pca_cLISI={:.4f} lda_cASW={:.4f} lda_cLISI={:.4f}'.format(acc, nmi, ari, pur, pca_casw, pca_clisi, lda_casw, lda_clisi))
     if return_latent:
-        return acc, nmi, pur, ari, target_pred, glb_vector
-    return acc, nmi, pur, ari
+        return acc, nmi, pur, ari, pca_casw, pca_clisi, lda_casw, lda_clisi, target_pred, glb_vector
+    return acc, nmi, pur, ari, pca_casw, pca_clisi, lda_casw, lda_clisi
