@@ -75,7 +75,6 @@ def evaluate(label, pred, z, return_full_metric=False):
     
     # from sklearn.metrics import confusion_matrix
     # cm = confusion_matrix(label, pred)
-    # # 找到每列的最大值行作为映射
     # max_indices = np.argmax(cm, axis=0)
     # pred = np.array([max_indices[i] for i in pred])
 
