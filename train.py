@@ -462,7 +462,7 @@ if __name__=="__main__":
             model.train()
             loss = contrastive_train(epoch,args.lamda_P,args.lamda_Q,args.lamda_U)
             rec_loss_ls.append(loss)
-            acc, nmi, pur, ari = valid(model, device, full_dataset, view, data_size, isprint=False)
+            acc = valid(model, device, full_dataset, view, data_size, isprint=False, return_latent=False, return_full_metric=False)
             acc_ls.append(acc)
             if acc > max_res[0]:
                 max_res = [acc, epoch - args.mse_epochs]
@@ -476,7 +476,7 @@ if __name__=="__main__":
                 checkpoint = torch.load('./models/' + args.dataset + '.pth')
                 model.load_state_dict(checkpoint)
                 print('Full dataset:')
-                acc, nmi, pur, ari, target_pred, glb_vector = valid(model, device, full_dataset, view, data_size, isprint=True, return_latent=True)
+                acc, nmi, pur, ari, pca_casw, pca_clisi, lda_casw, lda_clisi, target_pred, glb_vector = valid(model, device, full_dataset, view, data_size, isprint=True, return_latent=True, return_full_metric=True)
                 # save_latent(glb_vector, Dataname)
                 np.save(f'./latent/{args.dataset}_glb_vector.npy', glb_vector)
                 np.save(f'./latent/{args.dataset}_target_pred.npy', target_pred)
